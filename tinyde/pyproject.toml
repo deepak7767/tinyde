@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tinyde"
+version = "0.1.0"
+description = "Delta Lake write management toolkit — metadata management, integration testing, write analysis, and SCD operations."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Deepak Andagunda", email = "deepak.andagunda@gmail.com"},
+]
+keywords = [ "delta-lake", "pyspark", "scd", "schema-management", "data-quality", "ddl", "metadata", "metadata-management"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Database"
+]
+dependencies = [
+    "pyspark>=3.4.0",
+    "delta-spark>=2.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/deepak7767/tinyde"
+Repository = "https://github.com/deepak7767/tinyde"
+Issues = "https://github.com/deepak7767/tinyde/issues"
+
+[tool.setuptools]
+packages = [
+    "tinyde",
+    "tinyde.write_analyzer_features",
+    "tinyde.write_function_features",
+    "tinyde.metadata_management_features",
+    "tinyde.integration_test_features",
+    "tinyde.common_functions_libs",
+]
+
+[tool.setuptools.package-dir]
+tinyde = "."

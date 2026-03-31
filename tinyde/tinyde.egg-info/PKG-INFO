@@ -1,0 +1,327 @@
+Metadata-Version: 2.4
+Name: tinyde
+Version: 0.1.0
+Summary: Delta Lake write management toolkit — metadata management, integration testing, write analysis, and SCD operations.
+Author-email: Deepak Andagunda <deepak.andagunda@gmail.com>
+License: MIT
+Project-URL: Homepage, https://github.com/deepak7767/tinyde
+Project-URL: Repository, https://github.com/deepak7767/tinyde
+Project-URL: Issues, https://github.com/deepak7767/tinyde/issues
+Keywords: delta-lake,pyspark,scd,schema-management,data-quality,ddl,metadata,metadata-management
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Database
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE.py
+Requires-Dist: pyspark>=3.4.0
+Requires-Dist: delta-spark>=2.4.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Dynamic: license-file
+
+# tinyde
+
+A platform-agnostic Python toolkit for **end-to-end Delta Lake table management** — from schema creation and evolution, through data quality validation, to production-grade SCD writes. Works with any environment that supports PySpark, Delta Lake, and the `catalog.schema.table` namespace. Define everything in a single DDL-as-code file per table and let the framework handle the rest.
+
+> **One DDL file. One function call. Full lifecycle.** Engineers define schema, constraints, masking, write strategy, and integration tests in a single Python dictionary file. Call `tinyde_write()` and the framework creates or evolves the table, validates data quality, and writes data using the correct SCD strategy — all automatically.
+
+---
+
+## The Problem It Solves
+
+| Challenge | How tinyde Addresses It |
+| --- | --- |
+| **Fragmented tooling** — Schema management, data quality testing, and write logic live in separate frameworks, scripts, and notebooks | Provides a **single, unified toolkit** with three tightly integrated modules that share the same DDL file |
+| **No single source of truth** — Table definitions, test rules, and write strategies are scattered across code, tickets, and tribal knowledge | A single `.py` DDL file per table serves as the auditable, version-controllable contract for schema, constraints, masking, write type, and integration tests |
+| **Manual schema evolution** — Engineers write brittle ALTER scripts for every column change, rename, or datatype migration | Automatically computes schema diffs and generates all ALTER statements from the DDL |
+| **Repetitive merge patterns** — Every table needs hand-written MERGE INTO logic with subtle SCD1/SCD2 variations | Provides five battle-tested write strategies driven by a single `write_type` key in the DDL |
+| **Disconnected data quality** — Validation rules live in separate test scripts, disconnected from the schema they validate | Integration test constraints live **in the DDL file** alongside schema definitions |
+| **Pipeline-blocking test failures** — A single failing check aborts the pipeline even when some checks are informational | Supports **hard** and **soft** test types — hard failures raise exceptions, soft failures are recorded but don't block |
+
+---
+
+## Architecture Overview
+
+```
+tinyde_write()                                <- single orchestrator
+      |
+      |-- metadata_management_features/       <- schema lifecycle
+      |     |-- metadata_create_or_alter()          <- create or evolve tables from DDL
+      |     |-- create_and_read_ddl.py              <- DDL file I/O
+      |     |-- create_table.py                     <- initial table creation
+      |     +-- update_existing_ddl.py              <- schema diff + ALTER orchestration
+      |
+      |-- integration_test_features/          <- data quality validation
+      |     |-- run_integration_tests()             <- single-pass validation engine
+      |     +-- basic_checks.py                     <- schema, PK, null, range, skewness checks
+      |
+      |-- write_function_features/            <- data writing
+      |     |-- write_table()                       <- dispatch to correct write strategy
+      |     |-- scd_1_overwrite_merge_append.py     <- SCD1 merge, overwrite, append
+      |     |-- scd_2_ops.py                        <- SCD2 expiry-only, expiry-and-deleted
+      |     +-- common_functions.py                 <- hash generation + pre-checks
+      |
+      +-- common_functions_libs/              <- shared utilities
+            +-- common_functions.py                  <- Spark session + common imports
+```
+
+All three feature modules share the same DDL file. The orchestrator calls them in sequence: **create/alter → validate → write**.
+
+---
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+Requires:
+* Python >= 3.9
+* PySpark >= 3.4.0
+* delta-spark >= 2.4.0
+
+---
+
+## Quick Start
+
+### Full Pipeline (Recommended)
+
+```python
+from tinyde.main import tinyde_write
+
+tinyde_write(
+    catalog_name="my_catalog",
+    schema_name="my_schema",
+    table_name="customers",
+    final_df=spark.table("staging.customers"),
+    ddl_path="/path/to/ddl/customers"
+)
+```
+
+This single call:
+1. **Creates or alters** the target table to match the DDL schema
+2. **Runs integration tests** (schema validation, PK checks, null thresholds, range checks, skewness)
+3. **Writes data** using the SCD strategy specified in the DDL
+
+### Individual Modules
+
+Each module can also be used independently:
+
+```python
+# Schema management only
+from tinyde.metadata_management_features.main import metadata_create_or_alter
+metadata_create_or_alter(catalog_name, schema_name, table_name, final_df, ddl_path, primary_key_list)
+
+# Data quality testing only
+from tinyde.integration_test_features.main import run_integration_tests
+run_integration_tests(catalog_name, schema_name, table_name, final_df, ddl_path)
+
+# Data writing only
+from tinyde.write_function_features.main import write_table
+write_table(catalog_name, schema_name, table_name, source_dataframe, ddl_path)
+```
+
+---
+
+## DDL File Format
+
+The DDL file is a Python file containing a single `ddl_dict` variable. It serves as the **single source of truth** for schema, write strategy, masking, and integration test constraints:
+
+```python
+ddl_dict = {
+  "my_catalog.my_schema.customers": {
+    # Column definitions
+    "customer_id": {
+      "datatype": "bigint",
+      "comment": "Unique customer identifier",
+      "allow_nulls": False
+    },
+    "name": {
+      "datatype": "string",
+      "comment": "Customer full name",
+      "allow_nulls": True,
+      "constraints": {"null_threshold": 5},
+      "masking": {
+        "inclusion_group": ["data_admins", "analysts"]
+      }
+    },
+    "age": {
+      "datatype": "integer",
+      "comment": "Customer age",
+      "allow_nulls": True,
+      "constraints": {
+        "range_check": {"minimum_value": 0, "maximum_value": 150}
+      }
+    },
+    # Table-level configuration
+    "my_catalog.my_schema.customers": {
+      "comment": "Main customer dimension table",
+      "write_type": "scd_1_merge",
+      "cluster_by": ["customer_id"],
+      "constraints": {
+        "primary_key": ["customer_id"],
+        "minimum_row_count": 1000,
+        "integration_test_table_name": "my_schema.integration_test_results"
+      },
+      "masking": {
+        "exclusion_group": ["external_viewers"],
+        "catalog_name": "security_catalog",
+        "schema_name": "masking_functions"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Feature Modules
+
+### Metadata Management Features
+
+Declarative schema management for Delta Lake tables using DDL-as-code.
+
+**Capabilities:**
+* Auto-generate DDL files from DataFrame schemas
+* Create tables via DeltaTableBuilder API (partitioning, clustering, identity columns)
+* Compute schema diffs and apply incremental ALTER statements
+* Column renames, datatype changes (safe swap pattern), and reordering
+* Column masking (inclusion-based and exclusion-based)
+* Partition and cluster evolution
+
+**Entry point:** `metadata_create_or_alter(catalog_name, schema_name, table_name, final_df, ddl_path, primary_key_list)`
+
+See [metadata_management_features/README.md](metadata_management_features/README.md) for full documentation.
+
+---
+
+### Integration Test Features
+
+Declarative data quality validation using constraints defined in the DDL file.
+
+**Capabilities:**
+* Schema validation (column existence + datatype match)
+* Primary key uniqueness and null checks
+* Minimum row count thresholds
+* Per-column null percentage limits
+* Per-column value range boundaries
+* Category skewness detection
+* Hard/soft test types (block pipeline vs. record only)
+* Results persisted to a Delta table for historical tracking
+
+**Entry point:** `run_integration_tests(catalog_name, schema_name, table_name, final_df, ddl_path)`
+
+See [integration_test_features/README.md](integration_test_features/README.md) for full documentation.
+
+---
+
+### Write Function Features
+
+Production-grade SCD write operations driven by the DDL `write_type` key.
+
+**Capabilities:**
+* SCD Type 1 merge (update + insert + delete)
+* SCD Type 1 overwrite (full table replace)
+* Append (insert only)
+* SCD Type 2 expiry-only (expire + insert new versions + hard delete)
+* SCD Type 2 expiry-and-deleted (expire + insert new versions + soft delete)
+* Hash-based change detection with forward/reverse hashing
+* Automatic identity column exclusion
+* Source DataFrame column reordering
+
+**Supported write types:**
+
+| Write Type | Strategy | Deletes Missing PKs? | Tracks History? |
+| --- | --- | --- | --- |
+| `scd_1_merge` | Update changed, insert new, delete missing | Yes (hard delete) | No |
+| `scd_1_overwrite` | Full table replace | N/A | No |
+| `append` | Append only | No | No |
+| `scd_2_expiry_only` | Expire + insert new version + delete | Yes (hard delete) | Yes |
+| `scd_2_expiry_and_deleted` | Expire + insert new version + soft-delete | No (soft delete) | Yes |
+
+**Entry point:** `write_table(catalog_name, schema_name, table_name, source_dataframe, ddl_path)`
+
+See [write_function_features/README.md](write_function_features/README.md) for full documentation.
+
+---
+
+### Common Functions Library
+
+Shared utility module used by all feature modules.
+
+* `get_or_create_spark()` — Returns the active SparkSession or creates a new one
+* Re-exports common libraries: `delta`, `pyspark.sql.functions`, `DeltaTable`, `IdentityGenerator`, `json`, `os`, `ast`, `re`
+
+---
+
+## Execution Flow
+
+```
+tinyde_write()
+      |
+      |  1. METADATA MANAGEMENT
+      |     |-- Load or create DDL file
+      |     |-- Validate DDL keys
+      |     |-- Create table (if new) or compute & apply schema diff
+      |     +-- Apply column masking
+      |
+      |  2. INTEGRATION TESTS
+      |     |-- Validate schema alignment (fail-fast)
+      |     |-- Build SQL check expressions from DDL constraints
+      |     |-- Execute all checks in single DataFrame pass
+      |     |-- Evaluate results (PASSED/FAILED)
+      |     |-- Save results to Delta table
+      |     +-- Raise ValueError on hard failures
+      |
+      |  3. WRITE DATA
+      |     |-- Read DDL for write_type, primary_key, partition_by
+      |     |-- Run pre-checks (validate columns, detect identity cols)
+      |     |-- Generate PK + content hash dictionaries
+      |     |-- Reorder source DataFrame columns
+      |     +-- Dispatch to write strategy (SCD1/SCD2/overwrite/append)
+      |
+      +-- Done
+```
+
+---
+
+## Project Structure
+
+```
+tinyde/
+|-- main.py                             <- tinyde_write() orchestrator
+|-- __init__.py
+|-- pyproject.toml
+|-- README.md                           <- this file
+|
+|-- common_functions_libs/
+|     +-- common_functions.py           <- Spark session + shared imports
+|
+|-- metadata_management_features/
+|     |-- main.py                       <- metadata_create_or_alter()
+|     |-- create_and_read_ddl.py        <- DDL file create/read
+|     |-- create_table.py              <- DeltaTableBuilder creation
+|     |-- update_existing_ddl.py       <- schema diff + ALTER engine
+|     +-- README.md
+|
+|-- integration_test_features/
+|     |-- main.py                       <- run_integration_tests()
+|     |-- basic_checks.py              <- all check builders + evaluation
+|     |-- intermediate_checks.py       <- (reserved)
+|     |-- metadata_checks.py           <- (reserved)
+|     +-- README.md
+|
++-- write_function_features/
+      |-- main.py                       <- write_table()
+      |-- common_functions.py           <- create_hash() + pre_checks()
+      |-- scd_1_overwrite_merge_append.py  <- SCD1 merge, overwrite, append
+      |-- scd_2_ops.py                 <- SCD2 expiry-only, expiry-and-deleted
+      +-- README.md
+```
+
+---
+
+## License
+
+MIT
